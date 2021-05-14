@@ -2,6 +2,7 @@
 # This script implements the GALLOP algorithm for longitudinal GWAS analysis
 # Additional details can be found in the original publication
 # https://www.nature.com/articles/s41598-018-24578-7
+# Install the python packages in the requirements.txt file prior to running
 
 import datatable
 import statsmodels.api as sm
@@ -25,7 +26,8 @@ def is_plink_export_raw(ds):
 
 def preprocess(dp, dc, ds, covariates=None, 
                standardize=True,  keep=None, time_name=None,
-               pheno_name=None):
+               pheno_name=None, rawfile=False):
+
   id_in_study = set.intersection(*[set(x['IID'].tolist()) for x in [dp, dc, ds]])
   sys.stdout.write("Found {} subjects\n".format(len(id_in_study)))
   if keep is not None:
@@ -35,8 +37,7 @@ def preprocess(dp, dc, ds, covariates=None,
     sys.stdout.write("IID list provided; keeping {} subjects\n".format(len(id_in_study)))
   
   ds = ds[ds.IID.isin(id_in_study)].sort_values(by=['IID'])
-  if is_plink_export_raw(ds):
-    sys.stdout.write("Detected PLINK raw headers in predictor file; dropping excess columns\n")
+  if rawfile:
     ds = ds.drop(['FID', 'IID', 'PAT', 'MAT', 'SEX', 'PHENOTYPE'], axis=1)
   else:
     ds = ds.drop(['IID'], axis=1) # drop ID after filtering
@@ -323,13 +324,17 @@ https://www.nature.com/articles/s41598-018-24578-7
   if not (args.rawfile or args.prfile):
     parser.error('One predictor file must be specified --rawfile for plink RAW and --prfile for other formats')
 
+  rawfile = False
+  if args.rawfile:
+    rawfile = True
+
   dp = pd.read_csv(args.pheno, engine='c', sep='\t')
   dc = pd.read_csv(args.covar, engine='c', sep='\t')
-  ds = datatable.fread(args.rawfile if not args.prfile else args.prfile, sep='\t')
+  ds = datatable.fread(args.rawfile if rawfile else args.prfile, sep='\t')
   ds = ds.to_pandas()
 
   data, ds = preprocess(dp, dc, ds, args.covar_name, args.covar_variance_standardize, args.keep,
-                        args.time_name, args.pheno_name)
+                        args.time_name, args.pheno_name, rawfile=rawfile)
 
   if args.gallop:
     base_formula = f'y ~ {" + ".join(args.covar_name)} + time' 
@@ -340,7 +345,7 @@ https://www.nature.com/articles/s41598-018-24578-7
     out_fn = 'gallop_output.csv'
     if args.out is not None:
       out_fn = args.out
-    result.to_csv(out_fn, index=False)
+    result.to_csv(out_fn, index=False, sep='\t')
 
   elif args.lme:
     pass
