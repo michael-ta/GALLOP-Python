@@ -186,44 +186,13 @@ def do_gallop(mdf, data, ds):
   COV = np.multiply(np.power(sig,2), Corr)
   Pval = np.multiply(2, norm.cdf(-np.abs(Theta / SE)))
 
-  # Export Plink like Formatting
-  data_dict = {'CHROM': [],
-               'POS': [],
-               'REF': [],
-               'ALT': [],
-               'A1': [],
-               'ID': []}
-  for snp in s:
-    chrom, pos, ref, alt = snp.split(':')
-    alt, a1 = alt.split('_')
-    id = ':'.join([chrom, pos, ref, alt])
-    data_dict['CHROM'].append(chrom)
-    data_dict['POS'].append(pos)
-    data_dict['REF'].append(ref)
-    data_dict['ALT'].append(alt)
-    data_dict['A1'].append(a1)
-    data_dict['ID'].append(id)
-
-  p = pd.DataFrame.from_dict(data_dict)
-  p['A1_FREQ'] = (ds.mean(axis=0) / 2).tolist()
-  p['OBS_CT'] = (ds.notna().sum(axis=0)).tolist()
-  p['OBS_CT_REP'] = np.squeeze(np.asarray(np.matmul(TTs[:,0], np.matrix(ds.notna()))))
-
   a = pd.DataFrame()
-  a['#CHROM'] = list(map(lambda x: x.replace('chr',''), p['CHROM'].tolist()))
-  a['POS'] = p['POS']
-  a['ID'] = p['ID']
-  a['REF'] = p['REF']
-  a['ALT'] = p['ALT']
-  a['A1'] = p['ALT']
-  a['A1_FREQ'] = round(1-p.A1_FREQ,8)
   a['TEST'] = 'ADD_CHANGE'
-  a['OBS_CT'] = p.OBS_CT
   a['BETA'] = -Theta[:,1]
   a['SE'] = SE[:,1]
   a['T_STAT'] = -9
   a['P'] = Pval[:,1]
-  a['OBS_CT_REP'] = p.OBS_CT_REP
+  a['OBS_CT_REP'] = np.squeeze(np.asarray(np.matmul(TTs[:,0], np.matrix(ds.notna()))))
   a['BETAi'] = -Theta[:,0]
   a['SEi'] = SE[:,0]
   a['Pi'] = Pval[:,0]
@@ -280,6 +249,40 @@ def do_lme(data, ds):
   a['P'] = betas[:,3]
 
   return a
+
+
+def format_gwas_output(ds, res):
+  ''' given the genotype dataframe `ds` and the result of the model (gallop or lme) `res` we want to format the 
+      output following plink summary statistics
+
+      we're expecting the column names in the dataframe to be chr:pos:ref:ref_alt
+  '''
+  snp_ids = list(ds.columns)
+  data_dict = {'#CHROM': [],
+               'POS': [],
+               'REF': [],
+               'ALT': [],
+               'A1': [],
+               'ID': []}
+  for snp in snp_ids:
+    chrom, pos, ref, alt = snp.split(':')
+    alt, a1 = alt.split('_')
+    ID = ':'.join([chrom, pos, ref, alt])
+    data_dict['#CHROM'].append(chrom)
+    data_dict['POS'].append(pos)
+    data_dict['REF'].append(ref)
+    data_dict['ALT'].append(alt)
+    data_dict['A1'].append(a1)
+    data_dict['ID'].append(ID)
+
+  p = pd.DataFrame.from_dict(data_dict)
+  p['A1_FREQ'] = (ds.mean(axis=0) / 2).tolist()
+  p['OBS_CT'] = (ds.notna().sum(axis=0)).tolist()
+
+  result = pd.concat([p, res], axis=1)
+  header = ['#CHROM', 'POS',' ID', 'REF', 'ALT', 'A1', 'A1_FREQ', 'TEST', 'OBS_CT',
+            'BETA', 'SE', 'T_STAT', 'P', 'OBS_CT_REP', 'BETAi', 'SEi', 'Pi', 'COV']
+  return result[header]
 
 
 def main():
@@ -342,6 +345,7 @@ https://www.nature.com/articles/s41598-018-24578-7
     sys.stdout.write(f'Fitting base model: {base_formula}\n') 
     base_mod = fit_lme(base_formula, data)
     result = do_gallop(base_mod, data, ds)
+    result = format_gwas_output(ds, result)
     out_fn = 'gallop_output.csv'
     if args.out is not None:
       out_fn = args.out
