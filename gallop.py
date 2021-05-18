@@ -269,20 +269,18 @@ def format_gwas_output(ds, res):
     alt, a1 = alt.split('_')
     ID = ':'.join([chrom, pos, ref, alt])
     data_dict['#CHROM'].append(chrom)
+    data_dict['ID'].append(ID)
     data_dict['POS'].append(pos)
     data_dict['REF'].append(ref)
     data_dict['ALT'].append(alt)
     data_dict['A1'].append(a1)
-    data_dict['ID'].append(ID)
 
   p = pd.DataFrame.from_dict(data_dict)
   p['A1_FREQ'] = (ds.mean(axis=0) / 2).tolist()
   p['OBS_CT'] = (ds.notna().sum(axis=0)).tolist()
 
   result = pd.concat([p, res], axis=1)
-  header = ['#CHROM', 'POS',' ID', 'REF', 'ALT', 'A1', 'A1_FREQ', 'TEST', 'OBS_CT',
-            'BETA', 'SE', 'T_STAT', 'P', 'OBS_CT_REP', 'BETAi', 'SEi', 'Pi', 'COV']
-  return result[header]
+  return result
 
 
 def main():
