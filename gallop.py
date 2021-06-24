@@ -259,11 +259,11 @@ def format_gwas_output(ds, res):
   '''
   snp_ids = list(ds.columns)
   data_dict = {'#CHROM': [],
+               'ID': [],
                'POS': [],
                'REF': [],
                'ALT': [],
-               'A1': [],
-               'ID': []}
+               'A1': []}
   for snp in snp_ids:
     chrom, pos, ref, alt = snp.split(':')
     alt, a1 = alt.split('_')
