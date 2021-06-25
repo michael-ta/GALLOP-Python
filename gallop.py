@@ -4,7 +4,6 @@
 # https://www.nature.com/articles/s41598-018-24578-7
 # Install the python packages in the requirements.txt file prior to running
 
-import datatable
 import statsmodels.api as sm
 import statsmodels.formula.api as smf
 import numpy as np
@@ -16,6 +15,13 @@ import argparse
 import sys
 import os
 
+try:
+	import datatable
+except ImportError:
+	datatable = None
+
+
+
 def is_plink_export_raw(ds):
   """ Check to see if dataframe comes from PLINK export command, if so we want to drop these columns
       TODO:
@@ -26,7 +32,7 @@ def is_plink_export_raw(ds):
 
 def preprocess(dp, dc, ds, covariates=None, 
                standardize=True,  keep=None, time_name=None,
-               pheno_name=None, rawfile=False):
+               pheno_name=None, MAF=None, rawfile=False):
 
   id_in_study = set.intersection(*[set(x['IID'].tolist()) for x in [dp, dc, ds]])
   sys.stdout.write("Found {} subjects\n".format(len(id_in_study)))
@@ -41,6 +47,17 @@ def preprocess(dp, dc, ds, covariates=None,
     ds = ds.drop(['FID', 'IID', 'PAT', 'MAT', 'SEX', 'PHENOTYPE'], axis=1)
   else:
     ds = ds.drop(['IID'], axis=1) # drop ID after filtering
+  
+  # drop alleles that have no unique values
+  ds_drop_idx = ds.apply(lambda x: x.nunique() == 1)
+  ds = ds.drop(ds.columns[ds_drop_idx], axis=1)
+  
+  if MAF is not None:
+  	# drop variants that have MAF lower than specified
+  	n = len(id_in_study) * 2
+  	ds_drop_idx = ds.apply(lambda x: (n - x.sum()) / n ) < MAF
+  	ds = ds.drop(ds.columns[ds_drop_idx], axis=1)
+  	
   
   df = pd.merge(dp, dc, left_on='IID', right_on='IID', how='inner')
   df = df[df.IID.isin(id_in_study)]
@@ -63,10 +80,11 @@ def preprocess(dp, dc, ds, covariates=None,
   
   data['time'] = df.time
   if pheno_name is not None:
-    data['y'] = df[pheno_name]
+    data = pd.concat([data, df[pheno_name]], axis=1)
   else:
     data['y'] = df.y
   data['id'] = pd.factorize(df.IID)[0] + 1 # add 1 since R is 1 based indexing
+  data.reset_index(drop=True, inplace=True)
 
   return data, ds
 
@@ -187,7 +205,7 @@ def do_gallop(mdf, data, ds):
   Pval = np.multiply(2, norm.cdf(-np.abs(Theta / SE)))
 
   a = pd.DataFrame()
-  a['TEST'] = 'ADD_CHANGE'
+  a['TEST'] = ['ADD_CHANGE'] * ns
   a['BETA'] = -Theta[:,1]
   a['SE'] = SE[:,1]
   a['T_STAT'] = -9
@@ -281,7 +299,20 @@ def format_gwas_output(ds, res):
 
   result = pd.concat([p, res], axis=1)
   return result
+  
 
+def load(fn, hdf_key=None):
+  fp, ext = os.path.splitext(fn)
+  if ext == '.csv':
+    return pd.read_csv(fn, engine='c')
+  elif ext == '.h5':
+    if hdf_key is None:
+      raise KeyError("No HDF key provided")
+    return pd.read_hdf(fn, key=hdf_key)
+  elif ext == '.tsv':
+    return pd.read_csv(fn, engine='c', sep='\t')
+  else:
+    raise Exception("Unknown extension for phenotype")
 
 def main():
   parser = argparse.ArgumentParser(description="""
@@ -303,21 +334,22 @@ https://www.nature.com/articles/s41598-018-24578-7
 
   parser.add_argument('--rawfile', help='plink RAW file')
   parser.add_argument('--prfile', help='Predictor file')
+  parser.add_argument('--hdf-key', help='Key for HDF file')
   parser.add_argument('--pheno', help='Phenotype file', required=True)
   parser.add_argument('--covar', help='Covariate file', required=True)
+  parser.add_argument('--model', help='Base model to fit if additional terms needed')
 
   parser.add_argument('--pheno-name', help='Phenotype or response the data is fit to, DEFAULT=y',
                       default='y')
-  parser.add_argument('--covar-name', help='Covariates to include in the model \
-                                            ex: "SEX PC1 PC2"',
+  parser.add_argument('--pheno-name-file', help='File outlining the phenotypes (one on each line)') 
+  parser.add_argument('--covar-name', help='Covariates to include in the model ex: "SEX PC1 PC2"',
                       required=True, nargs='+')
-  parser.add_argument('--time-name', help='Column name of time variable in phenotype; required for \
-                                           GALLOP analysis')
+  parser.add_argument('--time-name', help='Column name of time variable in phenotype; required for GALLOP analysis')
   parser.add_argument('--covar-variance-standardize', 
                       help='Standardize quantitative covariates to follow ~N(0,1)',
                       default=True)
-  parser.add_argument('--keep', help='File with IID to keep for analysis',
-    )
+  parser.add_argument('--keep', help='File with IID to keep for analysis')
+  parser.add_argument('--maf', help='Filter out variants with minor allele frequency less than maf')
   parser.add_argument('--out', help='Path to output file')
 
   args = parser.parse_args()
@@ -329,25 +361,38 @@ https://www.nature.com/articles/s41598-018-24578-7
   if args.rawfile:
     rawfile = True
 
-  dp = pd.read_csv(args.pheno, engine='c', sep='\t')
+  dp = load(args.pheno, hdf_key=args.hdf_key)
   dc = pd.read_csv(args.covar, engine='c', sep='\t')
-  ds = datatable.fread(args.rawfile if rawfile else args.prfile, sep='\t')
-  ds = ds.to_pandas()
+  if datatable is not None:
+    ds = datatable.fread(args.rawfile if rawfile else args.prfile, sep='\t')
+    ds = ds.to_pandas()
+  else:
+    ds = pd.read_csv(args.rawfile if rawfile else args.prfile, sep='\t')
+
+  if args.pheno_name_file:
+    pheno_name = []
+    with open(args.pheno_name_file, 'r') as f:
+      pheno_name = f.read().split('\n')
+  else:
+    pheno_name = [args.pheno_name]
 
   data, ds = preprocess(dp, dc, ds, args.covar_name, args.covar_variance_standardize, args.keep,
-                        args.time_name, args.pheno_name, rawfile=rawfile)
+                        args.time_name, pheno_name, args.maf, rawfile=rawfile)
 
   if args.gallop:
-    base_formula = f'y ~ {" + ".join(args.covar_name)} + time' 
-    sys.stdout.write('Running GALLOP algorithm\n')
-    sys.stdout.write(f'Fitting base model: {base_formula}\n') 
-    base_mod = fit_lme(base_formula, data)
-    result = do_gallop(base_mod, data, ds)
-    result = format_gwas_output(ds, result)
-    out_fn = 'gallop_output.csv'
-    if args.out is not None:
-      out_fn = args.out
-    result.to_csv(out_fn, index=False, sep='\t')
+    for pheno in pheno_name:
+      data['y'] = data[pheno]
+      base_formula = args.model if args.model else f'y ~ {" + ".join(args.covar_name)} + time' 
+      sys.stdout.write('Running GALLOP algorithm\n')
+      sys.stdout.write(f'Fitting base model: {base_formula}\n') 
+      base_mod = fit_lme(base_formula, data)
+      result = do_gallop(base_mod, data, ds)
+      sys.stdout.write(f'Fitting base model with phenotype: {pheno}')
+      result = format_gwas_output(ds, result)
+      out_fn = f'gallop_output.{pheno}.csv'
+      if args.out is not None:
+        out_fn = f'{args.out}.{pheno}.tsv'
+      result.to_csv(out_fn, index=False, sep='\t')
 
   elif args.lme:
     pass
