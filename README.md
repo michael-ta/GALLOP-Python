@@ -4,9 +4,9 @@ Python implementation of GALLOP algorithm for longitudinal GWAS analysis
 
 ## Installation
 
-Install packages in requirements.txt with pip
+Install dependencies in requirements.txt with pip. If datatable is not available default to Pandas.
 
-## Basic Usuage
+## Basic Usage
 ```sh
 
 ./gallop.py --rawfile $path_to_rawfile \
