@@ -24,7 +24,7 @@ behavior can be overidden by using the `--model` argument to define the exact mo
 used to include higher power or non-linear terms. The genotype will be appended to this into this model.
 
 ```sh
---model "y ~ SEX + PC1 + PC2 + PC3 + age_at_baseline + np.power(age_at_baseline, 2) + time
+--model "y ~ SEX + PC1 + PC2 + PC3 + age_at_baseline + np.power(age_at_baseline, 2) + time"
 ```
 
 ### Fitting multiple phenotypes
