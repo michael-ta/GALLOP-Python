@@ -93,6 +93,14 @@ def fit_lme(formula, data):
   mdf = md.fit(method=['Powell'], maxiter=1000) # optimizer used by R bobyqa
   return mdf
 
+def get_params(mdf):
+  ''' given a statsmodel object get the params corresponding to the mean + slope effects
+  '''
+  tmp_mod.bse['Beta', 'Betai']
+  tmp_mod.params['Beta', 'Betai']
+  tmp_params.pvalues[['Beta', 'Betai']]
+
+
 def do_gallop(mdf, data, ds):
   G = mdf.cov_re
   # the unexplained variance (residuals) 
@@ -350,6 +358,9 @@ https://www.nature.com/articles/s41598-018-24578-7
                       default=True)
   parser.add_argument('--keep', help='File with IID to keep for analysis')
   parser.add_argument('--maf', help='Filter out variants with minor allele frequency less than maf')
+  #parser.add_argument('--pfilter', help='report associations with p-values no greater than threshold')
+  #parser.add_argument('--refit', help='refit model with LME if below refit-pval threshold', default=False)
+  #parser.add_argument('--refit-pval', help='pvalue threshold for refitting', default=5e-8)
   parser.add_argument('--out', help='Path to output file')
 
   args = parser.parse_args()
@@ -394,6 +405,21 @@ https://www.nature.com/articles/s41598-018-24578-7
         out_fn = f'{args.out}.{pheno}.tsv'
       result.to_csv(out_fn, index=False, sep='\t')
 
+      #if args.refit:
+      #  refit_genos = result[(result.P <= args.refit_pval) or (result.Pi <= args.refit_pval)].Transcript.tolist()
+      #  sys.stdout.write(f'Refitting {len(refit_genos)} models with p-value < {args.refit_pval}')
+
+      #  for s in refit_genos:
+      #    base_formula = args.model if args.model else f'y ~ {"+".join(args.covar_name)} + time'
+      #    base_formula += f' + {s} + {s}xt'
+      #    tmp_ds = ds[s].reset_index()
+      #    tmp_ds['index'] = tmp_ds['index'] + 1
+      #    tmp_data = pd.merge(data, tmp_ds, left_on='id', right_on='index', how='inner')
+      #    tmp_data[f'{s}xt'] = tmp_data[s] * tmp_data['time']
+          
+      #    base_mod = fit_lme(base_formiula, tmp_data)
+      #    tmp_mod.summary().coef
+        
   elif args.lme:
     pass
   # if input is PLINK export format -> we can drop the redundant columns
