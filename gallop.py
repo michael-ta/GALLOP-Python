@@ -9,7 +9,7 @@ import statsmodels.formula.api as smf
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import scale
-from sklearn.imput import SimpleImputer
+from sklearn.impute import SimpleImputer
 from scipy.stats import norm
 
 import argparse
@@ -60,9 +60,11 @@ def preprocess(dp, dc, ds, covariates=None,
   	ds = ds.drop(ds.columns[ds_drop_idx], axis=1)
   
   if impute is not None:
-    imp_ds = SimpleImputer(missing_values=pd.NA, strategy=impute)	
+    imp_ds = SimpleImputer(missing_values=np.nan, strategy=impute)	
     imp_ds.fit(ds)
+    tmp_header = ds.columns.tolist()
     ds = imp_ds.transform(ds)
+    ds = pd.DataFrame(ds, column=tmp_header)
   
   df = pd.merge(dp, dc, left_on='IID', right_on='IID', how='inner')
   df = df[df.IID.isin(id_in_study)]
