@@ -9,6 +9,7 @@ import statsmodels.formula.api as smf
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import scale
+from sklearn.imput import SimpleImputer
 from scipy.stats import norm
 
 import argparse
@@ -32,7 +33,7 @@ def is_plink_export_raw(ds):
 
 def preprocess(dp, dc, ds, covariates=None, 
                standardize=True,  keep=None, time_name=None,
-               pheno_name=None, MAF=None, rawfile=False):
+               pheno_name=None, MAF=None, rawfile=False, impute=None):
 
   id_in_study = set.intersection(*[set(x['IID'].tolist()) for x in [dp, dc, ds]])
   sys.stdout.write("Found {} subjects\n".format(len(id_in_study)))
@@ -57,7 +58,11 @@ def preprocess(dp, dc, ds, covariates=None,
   	n = len(id_in_study) * 2
   	ds_drop_idx = ds.apply(lambda x: (n - x.sum()) / n ) < MAF
   	ds = ds.drop(ds.columns[ds_drop_idx], axis=1)
-  	
+  
+  if impute is not None:
+    imp_ds = SimpleImputer(missing_values=pd.NA, strategy=impute)	
+    imp_ds.fit(ds)
+    ds = imp_ds.transform(ds)
   
   df = pd.merge(dp, dc, left_on='IID', right_on='IID', how='inner')
   df = df[df.IID.isin(id_in_study)]
@@ -388,7 +393,7 @@ https://www.nature.com/articles/s41598-018-24578-7
     pheno_name = [args.pheno_name]
 
   data, ds = preprocess(dp, dc, ds, args.covar_name, args.covar_variance_standardize, args.keep,
-                        args.time_name, pheno_name, args.maf, rawfile=rawfile)
+                        args.time_name, pheno_name, args.maf, rawfile=rawfile, impute='mean')
 
   if args.gallop:
     for pheno in pheno_name:
@@ -397,8 +402,8 @@ https://www.nature.com/articles/s41598-018-24578-7
       sys.stdout.write('Running GALLOP algorithm\n')
       sys.stdout.write(f'Fitting base model: {base_formula}\n') 
       base_mod = fit_lme(base_formula, data)
-      result = do_gallop(base_mod, data, ds)
       sys.stdout.write(f'Fitting base model with phenotype: {pheno}')
+      result = do_gallop(base_mod, data, ds)
       result = format_gwas_output(ds, result)
       out_fn = f'gallop_output.{pheno}.csv'
       if args.out is not None:
