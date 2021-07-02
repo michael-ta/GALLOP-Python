@@ -98,7 +98,7 @@ def preprocess(dp, dc, ds, covariates=None,
     imp_ds.fit(ds)
     tmp_header = ds.columns.tolist()
     ds = imp_ds.transform(ds)
-    ds = pd.DataFrame(ds, column=tmp_header)
+    ds = pd.DataFrame(ds, columns=tmp_header)
   
   df = pd.merge(dp, dc, left_on='IID', right_on='IID', how='inner')
   df = df[df.IID.isin(id_in_study)]
