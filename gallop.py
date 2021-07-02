@@ -31,6 +31,40 @@ def is_plink_export_raw(ds):
   return (ds.columns[:6] == ['FID', 'IID', 'PAT', 'MAT', 'SEX', 'PHENOTYPE']).all()
 
 
+def load_plink_raw(fn):
+  """ More efficient loading of the plink export genotype data
+      TODO:
+        reduce memory usuage by loading chuncks of data
+  """
+  cdata = [] # clinical data
+  gdata = [] # genotype data
+  header = None
+
+  # dtypes of plink headers
+  dtypes = {'FID': np.dtype(np.str),
+            'IID': np.dtype(np.str),
+            'PAT': np.dtype(np.int),
+            'MAT': np.dtype(np.int),
+            'SEX': np.dtype(np.int),
+            'PHENOTYPE': np.dtype(np.int)}
+  
+  with open(fn, 'r') as f:
+    for l in iter(f.readline, ''):
+      if header is None:
+        header = l.strip().split('\t')
+        continue
+      data = l.strip().split('\t')
+      cdata.append(data[:6])
+      tmp_arr = map(lambda x: np.nan if x == 'NA' else x, data[6:])
+      tmp_arr = np.asarray(list(tmp_arr), dtype=np.float)
+      gdata.append(tmp_arr)
+  ds = np.vstack(gdata)
+  ds = pd.DataFrame(ds, columns=header[6:])
+  cds = pd.DataFrame(cdata, columns=header[:6])
+  cds.astype(dtype=dtypes)
+  return pd.concat([cds, ds], axis=1)
+
+
 def preprocess(dp, dc, ds, covariates=None, 
                standardize=True,  keep=None, time_name=None,
                pheno_name=None, MAF=None, rawfile=False, impute=None):
@@ -381,7 +415,10 @@ https://www.nature.com/articles/s41598-018-24578-7
 
   dp = load(args.pheno, hdf_key=args.hdf_key)
   dc = pd.read_csv(args.covar, engine='c', sep='\t')
-  if datatable is not None:
+  
+  if rawfile:
+    ds = load_plink_raw(args.rawfile)
+  elif datatable is not None:
     ds = datatable.fread(args.rawfile if rawfile else args.prfile, sep='\t')
     ds = ds.to_pandas()
   else:
