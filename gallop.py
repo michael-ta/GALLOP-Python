@@ -4,6 +4,9 @@
 # https://www.nature.com/articles/s41598-018-24578-7
 # Install the python packages in the requirements.txt file prior to running
 
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+
 import statsmodels.api as sm
 import statsmodels.formula.api as smf
 import numpy as np
