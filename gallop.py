@@ -271,53 +271,36 @@ def do_gallop(mdf, data, ds):
   return a
 
 
-def do_lme(data, ds):
+def do_lme(data, ds, covariates=None):
   s = list(ds.columns)
   ns = len(s)
-  betas = np.empty((ns, 4))
+  beta_incpt = np.empty((ns, 4))
+  beta_slope = np.empty((ns, 4))
+  
+  ids = pd.factorize(data['id'].unique())[0] + 1
   for i in range(0, ns):
-    data['snp'] = ds[s[i]]
-    mod_formula = 'y ~ time + ' + '+'.join(covariates) + ' + snps' if len(covariates) > 0 else 'snps'
-    mdf = fit_lme(mod_formula, data)
-    betas[i,:] = np.array([ mdf.params['snp'], mdf.bse['snp'], mdf.tvalues['snp'], mdf.pvalues['snp'] ])
-
-  # Export Plink like Formatting
-  data_dict = {'CHROM': [],
-               'POS': [],
-               'REF': [],
-               'ALT': [],
-               'A1': [],
-               'ID': []}
-  for snp in s:
-    chrom, pos, ref, alt = snp.split(':')
-    alt, a1 = alt.split('_')
-    id = ':'.join([chrom, pos, ref, alt])
-    data_dict['CHROM'].append(chrom)
-    data_dict['POS'].append(pos)
-    data_dict['REF'].append(ref)
-    data_dict['ALT'].append(alt)
-    data_dict['A1'].append(a1)
-    data_dict['ID'].append(id)
-
-  p = pd.DataFrame.from_dict(data_dict)
-  p['A1_FREQ'] = (ds.mean(axis=0) / 2).tolist()
-  p['OBS_CT'] = (ds.notna().sum(axis=0)).tolist()
+    sys.stdout.write(f'Fitting LME for {s[i]}\n')
+    tmp_ds = ds[[s[i]]].copy()
+    tmp_ds = tmp_ds.rename(columns={s[i]: 'snp'})
+    tmp_ds['id'] = ids
+    
+    tmp_data = data.merge(tmp_ds, on='id', how='inner').copy()
+    tmp_data['sxt'] = tmp_data['snp'] * tmp_data['time']
+    mod_formula = 'y ~ time + ' + '+'.join(covariates) + ' + snp + sxt' if len(covariates) > 0 else 'snps + sxt'
+    mdf = fit_lme(mod_formula, tmp_data)
+    beta_incpt[i,:] = np.array([ mdf.params['snp'], mdf.bse['snp'], mdf.tvalues['snp'], mdf.pvalues['snp'] ])
+    beta_slope[i,:] = np.array([ mdf.params['sxt'], mdf.bse['sxt'], mdf.tvalues['sxt'], mdf.pvalues['sxt'] ])
 
   a = pd.DataFrame()
-  a['#CHROM'] = list(map(lambda x: x.replace('chr',''), p['CHROM'].tolist()))
-  a['POS'] = p['POS']
-  a['ID'] = p['ID']
-  a['REF'] = p['REF']
-  a['ALT'] = p['ALT']
-  a['A1'] = p['ALT']
-  a['A1_FREQ'] = round(1-p.A1_FREQ,8)
-  a['TEST'] = 'ADD_CHANGE'
-  a['OBS_CT'] = p.OBS_CT
-  a['BETA'] = -betas[:,0]
-  a['SE'] = betas[:,1]
-  a['T_STAT'] = betas[:,2]
-  a['P'] = betas[:,3]
-
+  a['TEST'] = ['ADD_CHANGE'] * ns
+  a['BETA'] = -beta_slope[:,0]
+  a['SE'] = beta_slope[:,1]
+  a['T_STAT'] = beta_slope[:,2]
+  a['P'] = beta_slope[:,3]
+  a['OBS_CT_REP'] = len(data) # length of the phenotypes includes longitudinal data
+  a['BETAi'] = -beta_incpt[:,0]
+  a['SEi'] = beta_incpt[:,1]
+  a['Pi'] = beta_incpt[:,3]
   return a
 
 
@@ -380,8 +363,8 @@ https://www.nature.com/articles/s41598-018-24578-7
 """,
                                    formatter_class=argparse.RawTextHelpFormatter)
   parser.add_argument('--gallop', help='Fit using GALLOP algorithm; DEFAULT',
-                      action='store_true', default=True)
-  parser.add_argument('--lmer', help='Fit using LME',
+                      action='store_true', default=False)
+  parser.add_argument('--lme', help='Fit using LME',
                       action='store_true', default=False)
 
   parser.add_argument('--rawfile', help='plink RAW file')
@@ -437,14 +420,14 @@ https://www.nature.com/articles/s41598-018-24578-7
   data, ds = preprocess(dp, dc, ds, args.covar_name, args.covar_variance_standardize, args.keep,
                         args.time_name, pheno_name, args.maf, rawfile=rawfile, impute='mean')
 
-  if args.gallop:
+  if args.gallop or (not args.gallop and not args.lme):
     for pheno in pheno_name:
       data['y'] = data[pheno]
       base_formula = args.model if args.model else f'y ~ {" + ".join(args.covar_name)} + time' 
       sys.stdout.write('Running GALLOP algorithm\n')
       sys.stdout.write(f'Fitting base model: {base_formula}\n') 
       base_mod = fit_lme(base_formula, data)
-      sys.stdout.write(f'Fitting base model with phenotype: {pheno}')
+      sys.stdout.write(f'Fitting base model with phenotype: {pheno}\n')
       result = do_gallop(base_mod, data, ds)
       result = format_gwas_output(ds, result)
       out_fn = f'gallop_output.{pheno}.csv'
@@ -468,7 +451,14 @@ https://www.nature.com/articles/s41598-018-24578-7
       #    tmp_mod.summary().coef
         
   elif args.lme:
-    pass
+    for pheno in pheno_name:
+      data['y'] = data[pheno]
+      result = do_lme(data, ds, args.covar_name)
+      result = format_gwas_output(ds, result)
+      out_fn = f'lme_output.{pheno}.csv'
+      if args.out is not None:
+        out_fn = f'{args.out}.{pheno}.tsv'
+      result.to_csv(out_fn, index=False, sep='\t')
   # if input is PLINK export format -> we can drop the redundant columns
   # TODO
   #   run either LME or GALLOP algorithm
