@@ -338,16 +338,21 @@ def format_gwas_output(ds, res):
 
 def load(fn, hdf_key=None):
   fp, ext = os.path.splitext(fn)
+  df = None
   if ext == '.csv':
-    return pd.read_csv(fn, engine='c')
+    df = pd.read_csv(fn, engine='c')
   elif ext == '.h5':
     if hdf_key is None:
       raise KeyError("No HDF key provided")
-    return pd.read_hdf(fn, key=hdf_key)
+    df = pd.read_hdf(fn, key=hdf_key)
   elif ext == '.tsv':
-    return pd.read_csv(fn, engine='c', sep='\t')
+    df = pd.read_csv(fn, engine='c', sep='\t')
   else:
     raise Exception("Unknown extension for phenotype")
+
+  df['IID'] = df['IID'].astype(str)
+  return df
+
 
 def main():
   parser = argparse.ArgumentParser(description="""
@@ -400,7 +405,7 @@ https://www.nature.com/articles/s41598-018-24578-7
     rawfile = True
 
   dp = load(args.pheno, hdf_key=args.hdf_key)
-  dc = pd.read_csv(args.covar, engine='c', sep='\t')
+  dc = load(args.covar, hdf_key=args.hdf_key)
   
   if rawfile:
     ds = load_plink_raw(args.rawfile)
