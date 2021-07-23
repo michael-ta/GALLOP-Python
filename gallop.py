@@ -435,9 +435,9 @@ https://www.nature.com/articles/s41598-018-24578-7
       sys.stdout.write(f'Fitting base model with phenotype: {pheno}\n')
       result = do_gallop(base_mod, data, ds)
       result = format_gwas_output(ds, result)
-      out_fn = f'gallop_output.{pheno}.csv'
+      out_fn = f'output.{pheno}.gallop'
       if args.out is not None:
-        out_fn = f'{args.out}.{pheno}.tsv'
+        out_fn = f'{args.out}.{pheno}.gallop'
       result.to_csv(out_fn, index=False, sep='\t')
 
       #if args.refit:
@@ -460,9 +460,9 @@ https://www.nature.com/articles/s41598-018-24578-7
       data['y'] = data[pheno]
       result = do_lme(data, ds, args.covar_name)
       result = format_gwas_output(ds, result)
-      out_fn = f'lme_output.{pheno}.csv'
+      out_fn = f'output.{pheno}.lmm'
       if args.out is not None:
-        out_fn = f'{args.out}.{pheno}.tsv'
+        out_fn = f'{args.out}.{pheno}.lmm'
       result.to_csv(out_fn, index=False, sep='\t')
   # if input is PLINK export format -> we can drop the redundant columns
   # TODO
