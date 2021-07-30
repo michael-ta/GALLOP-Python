@@ -428,13 +428,14 @@ https://www.nature.com/articles/s41598-018-24578-7
 
   if args.gallop or (not args.gallop and not args.lme):
     for pheno in pheno_name:
-      data['y'] = data[pheno]
+      XY = data[['id', 'time', pheno] + args.covar_name].copy()
+      XY.rename(columns={pheno:, 'y'}, inplace=True)
       base_formula = args.model if args.model else f'y ~ {" + ".join(args.covar_name)} + time' 
       sys.stdout.write('Running GALLOP algorithm\n')
       sys.stdout.write(f'Fitting base model: {base_formula}\n') 
-      base_mod = fit_lme(base_formula, data)
+      base_mod = fit_lme(base_formula, XY)
       sys.stdout.write(f'Fitting base model with phenotype: {pheno}\n')
-      result = do_gallop(base_mod, data, ds)
+      result = do_gallop(base_mod, XY, ds)
       result = format_gwas_output(ds, result)
       out_fn = f'output.{pheno}.gallop'
       if args.out is not None:
