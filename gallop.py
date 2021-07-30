@@ -389,7 +389,8 @@ https://www.nature.com/articles/s41598-018-24578-7
                       help='Standardize quantitative covariates to follow ~N(0,1)',
                       default=True)
   parser.add_argument('--keep', help='File with IID to keep for analysis')
-  parser.add_argument('--maf', help='Filter out variants with minor allele frequency less than maf')
+  parser.add_argument('--maf', type=float,
+                      help='Filter out variants with minor allele frequency less than maf')
   #parser.add_argument('--pfilter', help='report associations with p-values no greater than threshold')
   #parser.add_argument('--refit', help='refit model with LME if below refit-pval threshold', default=False)
   #parser.add_argument('--refit-pval', help='pvalue threshold for refitting', default=5e-8)
@@ -460,9 +461,9 @@ https://www.nature.com/articles/s41598-018-24578-7
       data['y'] = data[pheno]
       result = do_lme(data, ds, args.covar_name)
       result = format_gwas_output(ds, result)
-      out_fn = f'output.{pheno}.lmm'
+      out_fn = f'output.{pheno}.linear_mixed'
       if args.out is not None:
-        out_fn = f'{args.out}.{pheno}.lmm'
+        out_fn = f'{args.out}.{pheno}.linear_mixed'
       result.to_csv(out_fn, index=False, sep='\t')
   # if input is PLINK export format -> we can drop the redundant columns
   # TODO
