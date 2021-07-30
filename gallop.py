@@ -429,7 +429,7 @@ https://www.nature.com/articles/s41598-018-24578-7
   if args.gallop or (not args.gallop and not args.lme):
     for pheno in pheno_name:
       XY = data[['id', 'time', pheno] + args.covar_name].copy()
-      XY.rename(columns={pheno:, 'y'}, inplace=True)
+      XY.rename(columns={pheno: 'y'}, inplace=True)
       base_formula = args.model if args.model else f'y ~ {" + ".join(args.covar_name)} + time' 
       sys.stdout.write('Running GALLOP algorithm\n')
       sys.stdout.write(f'Fitting base model: {base_formula}\n') 
