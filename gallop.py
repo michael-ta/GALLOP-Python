@@ -20,10 +20,9 @@ import sys
 import os
 
 try:
-	import datatable
+  import datatable
 except ImportError:
-	datatable = None
-
+  datatable = None
 
 
 def is_plink_export_raw(ds):
@@ -89,20 +88,36 @@ def preprocess(dp, dc, ds, covariates=None,
   # drop alleles that have no unique values
   ds_drop_idx = ds.apply(lambda x: x.nunique() == 1)
   ds = ds.drop(ds.columns[ds_drop_idx], axis=1)
+
+  # drop alleles that have no unique values
+  ds_drop_idx = ds.isna().all()
+  ds = ds.drop(ds.columns[ds_drop_idx], axis=1)
+
+  freq = pd.DataFrame(index = ds.columns)
+  n = len(id_in_study) * 2
+  allele_freq = ds.apply(lambda x: x.sum() / (n - x.isna().sum()))
   
   if MAF is not None:
-  	# drop variants that have MAF lower than specified
-  	n = len(id_in_study) * 2
-  	ds_drop_idx = ds.apply(lambda x: (n - x.sum()) / n ) < MAF
-  	ds = ds.drop(ds.columns[ds_drop_idx], axis=1)
+    # drop variants that have MAF lower than specified
+    ds_drop_idx = np.logical_or( allele_freq < MAF,
+                                 allele_freq > (1 - MAF) )
+    freq['A1_FREQ'] = allele_freq[~ds_drop_idx]
+    ds = ds.drop(ds.columns[ds_drop_idx], axis=1)
+  else:
+    freq['A1_FREQ'] = allele_freq
   
+  missing_freq = None
   if impute is not None:
-    imp_ds = SimpleImputer(missing_values=np.nan, strategy=impute)	
+    imp_ds = SimpleImputer(missing_values=np.nan, strategy=impute)
     imp_ds.fit(ds)
     tmp_header = ds.columns.tolist()
+    missing_freq = ds.isna().sum() / len(id_in_study)
+    freq['MISS_FREQ'] = missing_freq
+
     ds = imp_ds.transform(ds)
     ds = pd.DataFrame(ds, columns=tmp_header)
   
+  freq = freq.dropna()
   df = pd.merge(dp, dc, left_on='IID', right_on='IID', how='inner')
   df = df[df.IID.isin(id_in_study)]
 
@@ -130,7 +145,7 @@ def preprocess(dp, dc, ds, covariates=None,
   data['id'] = pd.factorize(df.IID)[0] + 1 # add 1 since R is 1 based indexing
   data.reset_index(drop=True, inplace=True)
 
-  return data, ds
+  return data, ds, freq
 
 def fit_lme(formula, data):
   md = smf.mixedlm(formula, data, groups=data["id"], re_formula='~time')
@@ -304,7 +319,7 @@ def do_lme(data, ds, covariates=None):
   return a
 
 
-def format_gwas_output(ds, res):
+def format_gwas_output(ds, res, freq):
   ''' given the genotype dataframe `ds` and the result of the model (gallop or lme) `res` we want to format the 
       output following plink summary statistics
 
@@ -313,6 +328,7 @@ def format_gwas_output(ds, res):
   snp_ids = list(ds.columns)
   data_dict = {'#CHROM': [],
                'ID': [],
+               'SNP_ID': [],
                'POS': [],
                'REF': [],
                'ALT': [],
@@ -323,14 +339,16 @@ def format_gwas_output(ds, res):
     ID = ':'.join([chrom, pos, ref, alt])
     data_dict['#CHROM'].append(chrom)
     data_dict['ID'].append(ID)
+    data_dict['SNP_ID'].append(snp)
     data_dict['POS'].append(pos)
     data_dict['REF'].append(ref)
     data_dict['ALT'].append(alt)
     data_dict['A1'].append(a1)
 
   p = pd.DataFrame.from_dict(data_dict)
-  p['A1_FREQ'] = (ds.mean(axis=0) / 2).tolist()
+  p = p.merge(freq.reset_index(), left_on='SNP_ID', right_on='index', how='inner') 
   p['OBS_CT'] = (ds.notna().sum(axis=0)).tolist()
+  p = p.drop(columns=['SNP_ID', 'index'])
 
   result = pd.concat([p, res], axis=1)
   return result
@@ -423,8 +441,8 @@ https://www.nature.com/articles/s41598-018-24578-7
   else:
     pheno_name = [args.pheno_name]
 
-  data, ds = preprocess(dp, dc, ds, args.covar_name, args.covar_variance_standardize, args.keep,
-                        args.time_name, pheno_name, args.maf, rawfile=rawfile, impute='mean')
+  data, ds, freq = preprocess(dp, dc, ds, args.covar_name, args.covar_variance_standardize, args.keep,
+                                      args.time_name, pheno_name, args.maf, rawfile=rawfile, impute='mean')
 
   if args.gallop or (not args.gallop and not args.lme):
     for pheno in pheno_name:
@@ -436,7 +454,7 @@ https://www.nature.com/articles/s41598-018-24578-7
       base_mod = fit_lme(base_formula, XY)
       sys.stdout.write(f'Fitting base model with phenotype: {pheno}\n')
       result = do_gallop(base_mod, XY, ds)
-      result = format_gwas_output(ds, result)
+      result = format_gwas_output(ds, result, freq)
       out_fn = f'output.{pheno}.gallop'
       if args.out is not None:
         out_fn = f'{args.out}.{pheno}.gallop'
@@ -461,7 +479,7 @@ https://www.nature.com/articles/s41598-018-24578-7
     for pheno in pheno_name:
       data['y'] = data[pheno]
       result = do_lme(data, ds, args.covar_name)
-      result = format_gwas_output(ds, result)
+      result = format_gwas_output(ds, result, freq)
       out_fn = f'output.{pheno}.linear_mixed'
       if args.out is not None:
         out_fn = f'{args.out}.{pheno}.linear_mixed'
