@@ -327,9 +327,9 @@ def format_gwas_output(ds, res, freq):
   '''
   snp_ids = list(ds.columns)
   data_dict = {'#CHROM': [],
+               'POS': [],
                'ID': [],
                'SNP_ID': [],
-               'POS': [],
                'REF': [],
                'ALT': [],
                'A1': []}
@@ -338,9 +338,9 @@ def format_gwas_output(ds, res, freq):
     alt, a1 = alt.split('_')
     ID = ':'.join([chrom, pos, ref, alt])
     data_dict['#CHROM'].append(chrom)
+    data_dict['POS'].append(pos)
     data_dict['ID'].append(ID)
     data_dict['SNP_ID'].append(snp)
-    data_dict['POS'].append(pos)
     data_dict['REF'].append(ref)
     data_dict['ALT'].append(alt)
     data_dict['A1'].append(a1)
