@@ -149,7 +149,11 @@ def preprocess(dp, dc, ds, covariates=None,
 
 def fit_lme(formula, data):
   md = smf.mixedlm(formula, data, groups=data["id"], re_formula='~time')
-  mdf = md.fit(method=['Powell'], maxiter=1000) # optimizer used by R bobyqa
+  try:
+    mdf = md.fit(method=['Powell'], maxiter=1000) # optimizer used by R bobyqa
+  except np.linalg.LinAlgError as e:
+    print(data)
+    mdf = None 
   return mdf
 
 def get_params(mdf):
@@ -286,13 +290,19 @@ def do_gallop(mdf, data, ds):
   return a
 
 
-def do_lme(data, ds, covariates=None):
+def do_lme(data, ds, mod_formula=None, covariates=None):
   s = list(ds.columns)
   ns = len(s)
   beta_incpt = np.empty((ns, 4))
   beta_slope = np.empty((ns, 4))
   
   ids = pd.factorize(data['id'].unique())[0] + 1
+
+  if mod_formula is None:
+    mod_formula = 'y ~ time + ' + '+'.join(covariates) + ' + snp + sxt' if len(covariates) > 0 else 'snps + sxt'
+  else:
+    mod_formula += ' + time + snp + sxt'
+
   for i in range(0, ns):
     sys.stdout.write(f'Fitting LME for {s[i]}\n')
     tmp_ds = ds[[s[i]]].copy()
@@ -301,10 +311,14 @@ def do_lme(data, ds, covariates=None):
     
     tmp_data = data.merge(tmp_ds, on='id', how='inner').copy()
     tmp_data['sxt'] = tmp_data['snp'] * tmp_data['time']
-    mod_formula = 'y ~ time + ' + '+'.join(covariates) + ' + snp + sxt' if len(covariates) > 0 else 'snps + sxt'
+
     mdf = fit_lme(mod_formula, tmp_data)
-    beta_incpt[i,:] = np.array([ mdf.params['snp'], mdf.bse['snp'], mdf.tvalues['snp'], mdf.pvalues['snp'] ])
-    beta_slope[i,:] = np.array([ mdf.params['sxt'], mdf.bse['sxt'], mdf.tvalues['sxt'], mdf.pvalues['sxt'] ])
+    if mdf is not None:
+      beta_incpt[i,:] = np.array([ mdf.params['snp'], mdf.bse['snp'], mdf.tvalues['snp'], mdf.pvalues['snp'] ])
+      beta_slope[i,:] = np.array([ mdf.params['sxt'], mdf.bse['sxt'], mdf.tvalues['sxt'], mdf.pvalues['sxt'] ])
+    else:
+      beta_incpt[i,:] = np.array([np.NAN, np.NAN, np.NAN, np.NAN])
+      beta_slope[i,:] = np.array([np.NAN, np.NAN, np.NAN, np.NAN])
 
   a = pd.DataFrame()
   a['TEST'] = ['ADD_CHANGE'] * ns
@@ -349,7 +363,8 @@ def format_gwas_output(ds, res, freq):
   p = p.merge(freq.reset_index(), left_on='SNP_ID', right_on='index', how='inner') 
   p['OBS_CT'] = (ds.notna().sum(axis=0)).tolist()
   p = p.drop(columns=['SNP_ID', 'index'])
-
+  col_names = ['#CHROM', 'POS', 'ID', 'REF', 'ALT', 'A1', 'A1_FREQ', 'MISS_FREQ', 'OBS_CT']
+  p = p[col_names]
   result = pd.concat([p, res], axis=1)
   return result
   
@@ -478,7 +493,7 @@ https://www.nature.com/articles/s41598-018-24578-7
   elif args.lme:
     for pheno in pheno_name:
       data['y'] = data[pheno]
-      result = do_lme(data, ds, args.covar_name)
+      result = do_lme(data, ds, args.model, args.covar_name)
       result = format_gwas_output(ds, result, freq)
       out_fn = f'output.{pheno}.linear_mixed'
       if args.out is not None:
