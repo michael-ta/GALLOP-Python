@@ -424,6 +424,9 @@ https://www.nature.com/articles/s41598-018-24578-7
   parser.add_argument('--keep', help='File with IID to keep for analysis')
   parser.add_argument('--maf', type=float,
                       help='Filter out variants with minor allele frequency less than maf')
+
+  parser.add_argument('--out-fmt', help='Output formatting change to other if plink style output not needed, DEFAULT=gwas',
+                      default="gwas")
   #parser.add_argument('--pfilter', help='report associations with p-values no greater than threshold')
   #parser.add_argument('--refit', help='refit model with LME if below refit-pval threshold', default=False)
   #parser.add_argument('--refit-pval', help='pvalue threshold for refitting', default=5e-8)
@@ -443,11 +446,8 @@ https://www.nature.com/articles/s41598-018-24578-7
   
   if rawfile:
     ds = load_plink_raw(args.rawfile)
-  elif datatable is not None:
-    ds = datatable.fread(args.rawfile if rawfile else args.prfile, sep='\t')
-    ds = ds.to_pandas()
   else:
-    ds = pd.read_csv(args.rawfile if rawfile else args.prfile, sep='\t')
+    ds = load(args.rawfile if rawfile else args.prfile, hdf_key=args.hdf_key)
 
   if args.pheno_name_file:
     pheno_name = []
