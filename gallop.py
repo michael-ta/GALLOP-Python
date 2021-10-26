@@ -152,7 +152,10 @@ def fit_lme(formula, data):
   try:
     mdf = md.fit(method=['Powell'], maxiter=1000) # optimizer used by R bobyqa
   except np.linalg.LinAlgError as e:
-    print(data)
+    sys.stderr.write(f"Error encountered fitting formula: {formula}\n")
+    sys.stderr.write(e)
+    sys.stderr.write('\n')
+    sys.stderr.flush()
     mdf = None 
   return mdf
 
@@ -266,10 +269,16 @@ def do_gallop(mdf, data, ds):
     V = GtG - np.matmul(H1.transpose(), Cfix) - np.matmul(H2.transpose(), Cran)
     v = Gty - np.matmul(H1.transpose(), sol) - np.matmul(H2.transpose(), blups)
 
-    Theta[i] = np.linalg.solve(V, v).flatten()
-    Vi = np.linalg.inv(V)
-    D[i] = np.diag(Vi)
-    Corr[0,i] = Vi[0,1]
+    try:
+      Theta[i] = np.linalg.solve(V, v).flatten()
+      Vi = np.linalg.inv(V)
+      D[i] = np.diag(Vi)
+      Corr[0,i] = Vi[0,1]
+    except np.linalg.LinAlgError as e:
+      sys.stderr.write(f"Linear model error fitting {s[i]}\n")
+      sys.stderr.write(e)
+      sys.stderr.write('\n')
+      sys.stderr.flush()
 
   SE = np.multiply(np.sqrt(np.power(sig,2)), np.sqrt(np.abs(D)))
   COV = np.multiply(np.power(sig,2), Corr)
@@ -331,6 +340,16 @@ def do_lme(data, ds, mod_formula=None, covariates=None):
   a['SEi'] = beta_incpt[:,1]
   a['Pi'] = beta_incpt[:,3]
   return a
+
+
+def format_other_output(ds, res):
+  pred_ids = list(ds.columns)
+  data_dict = {'PredictorID': pred_ids}
+
+  p = pd.DataFrame.from_dict(data_dict)
+  p['OBS_CT'] = (ds.notna().sum(axis=0)).tolist()
+  result = pd.concat([p, res], axis=1)
+  return result
 
 
 def format_gwas_output(ds, res, freq):
@@ -469,7 +488,10 @@ https://www.nature.com/articles/s41598-018-24578-7
       base_mod = fit_lme(base_formula, XY)
       sys.stdout.write(f'Fitting base model with phenotype: {pheno}\n')
       result = do_gallop(base_mod, XY, ds)
-      result = format_gwas_output(ds, result, freq)
+      if args.out_fmt == 'gwas':
+        result = format_gwas_output(ds, result, freq)
+      else:
+        result = format_other_output(ds, result)
       out_fn = f'output.{pheno}.gallop'
       if args.out is not None:
         out_fn = f'{args.out}.{pheno}.gallop'
@@ -494,7 +516,10 @@ https://www.nature.com/articles/s41598-018-24578-7
     for pheno in pheno_name:
       data['y'] = data[pheno]
       result = do_lme(data, ds, args.model, args.covar_name)
-      result = format_gwas_output(ds, result, freq)
+      if args.out_fmt == 'gwas':
+        result = format_gwas_output(ds, result, freq)
+      else:
+        result = format_other_output(ds, result)
       out_fn = f'output.{pheno}.linear_mixed'
       if args.out is not None:
         out_fn = f'{args.out}.{pheno}.linear_mixed'
