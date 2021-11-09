@@ -73,6 +73,10 @@ def preprocess(dp, dc, ds, covariates=None,
 
   id_in_study = set.intersection(*[set(x['IID'].tolist()) for x in [dp, dc, ds]])
   sys.stdout.write("Found {} subjects\n".format(len(id_in_study)))
+
+  if len(id_in_study) == 0:
+    return (None, None, None)
+
   if keep is not None:
     dtmp = pd.read_csv(keep, engine='c', sep='\t', usecols=['IID'])
     id_in_study = id_in_study.intersection(set(dtmp['IID'].tolist()))
@@ -127,8 +131,8 @@ def preprocess(dp, dc, ds, covariates=None,
     df = df[df.IID.isin(id_in_study)].sort_values(by=['IID'])
 
   df['time'] = np.subtract(
-                np.divide(df.study_days, 365.25),
-                np.mean(np.divide(df.study_days.dropna(), 365.25)))
+                np.divide(df[time_name], 365.25),
+                np.mean(np.divide(df[time_name].dropna(), 365.25)))
 
   # scipy scale uses a biased estimator of variance with df=0
   # use an unbiased estimator of variance (n-1)
@@ -152,7 +156,10 @@ def fit_lme(formula, data):
   try:
     mdf = md.fit(method=['Powell'], maxiter=1000) # optimizer used by R bobyqa
   except np.linalg.LinAlgError as e:
-    print(data)
+    sys.stderr.write(f"Error encountered fitting formula: {formula}\n")
+    sys.stderr.write(str(e))
+    sys.stderr.write('\n')
+    sys.stderr.flush()
     mdf = None 
   return mdf
 
@@ -266,10 +273,16 @@ def do_gallop(mdf, data, ds):
     V = GtG - np.matmul(H1.transpose(), Cfix) - np.matmul(H2.transpose(), Cran)
     v = Gty - np.matmul(H1.transpose(), sol) - np.matmul(H2.transpose(), blups)
 
-    Theta[i] = np.linalg.solve(V, v).flatten()
-    Vi = np.linalg.inv(V)
-    D[i] = np.diag(Vi)
-    Corr[0,i] = Vi[0,1]
+    try:
+      Theta[i] = np.linalg.solve(V, v).flatten()
+      Vi = np.linalg.inv(V)
+      D[i] = np.diag(Vi)
+      Corr[0,i] = Vi[0,1]
+    except np.linalg.LinAlgError as e:
+      sys.stderr.write(f"Linear model error fitting {s[i]}\n")
+      sys.stderr.write(str(e))
+      sys.stderr.write('\n')
+      sys.stderr.flush()
 
   SE = np.multiply(np.sqrt(np.power(sig,2)), np.sqrt(np.abs(D)))
   COV = np.multiply(np.power(sig,2), Corr)
@@ -331,6 +344,16 @@ def do_lme(data, ds, mod_formula=None, covariates=None):
   a['SEi'] = beta_incpt[:,1]
   a['Pi'] = beta_incpt[:,3]
   return a
+
+
+def format_other_output(ds, res):
+  pred_ids = list(ds.columns)
+  data_dict = {'PredictorID': pred_ids}
+
+  p = pd.DataFrame.from_dict(data_dict)
+  p['OBS_CT'] = (ds.notna().sum(axis=0)).tolist()
+  result = pd.concat([p, res], axis=1)
+  return result
 
 
 def format_gwas_output(ds, res, freq):
@@ -417,13 +440,17 @@ https://www.nature.com/articles/s41598-018-24578-7
   parser.add_argument('--pheno-name-file', help='File outlining the phenotypes (one on each line)') 
   parser.add_argument('--covar-name', help='Covariates to include in the model ex: "SEX PC1 PC2"',
                       required=True, nargs='+')
-  parser.add_argument('--time-name', help='Column name of time variable in phenotype; required for GALLOP analysis')
+  parser.add_argument('--time-name', help='Column name of time variable in phenotype; required for GALLOP analysis',
+                      default='study_days')
   parser.add_argument('--covar-variance-standardize', 
                       help='Standardize quantitative covariates to follow ~N(0,1)',
                       default=True)
   parser.add_argument('--keep', help='File with IID to keep for analysis')
   parser.add_argument('--maf', type=float,
                       help='Filter out variants with minor allele frequency less than maf')
+
+  parser.add_argument('--out-fmt', help='Output formatting change to other if plink style output not needed, DEFAULT=gwas',
+                      default="gwas")
   #parser.add_argument('--pfilter', help='report associations with p-values no greater than threshold')
   #parser.add_argument('--refit', help='refit model with LME if below refit-pval threshold', default=False)
   #parser.add_argument('--refit-pval', help='pvalue threshold for refitting', default=5e-8)
@@ -443,11 +470,8 @@ https://www.nature.com/articles/s41598-018-24578-7
   
   if rawfile:
     ds = load_plink_raw(args.rawfile)
-  elif datatable is not None:
-    ds = datatable.fread(args.rawfile if rawfile else args.prfile, sep='\t')
-    ds = ds.to_pandas()
   else:
-    ds = pd.read_csv(args.rawfile if rawfile else args.prfile, sep='\t')
+    ds = load(args.rawfile if rawfile else args.prfile, hdf_key=args.hdf_key)
 
   if args.pheno_name_file:
     pheno_name = []
@@ -461,6 +485,16 @@ https://www.nature.com/articles/s41598-018-24578-7
 
   if args.gallop or (not args.gallop and not args.lme):
     for pheno in pheno_name:
+      out_fn = f'output.{pheno}.gallop'
+      if args.out is not None:
+        out_fn = f'{args.out}.{pheno}.gallop'
+
+      if data is None and ds is None and freq is None:
+        # no samples found write empty file and return
+        with open(out_fn, 'w') as f:
+          pass
+        continue
+
       XY = data[['id', 'time', pheno] + args.covar_name].copy()
       XY.rename(columns={pheno: 'y'}, inplace=True)
       base_formula = args.model if args.model else f'y ~ {" + ".join(args.covar_name)} + time' 
@@ -469,10 +503,11 @@ https://www.nature.com/articles/s41598-018-24578-7
       base_mod = fit_lme(base_formula, XY)
       sys.stdout.write(f'Fitting base model with phenotype: {pheno}\n')
       result = do_gallop(base_mod, XY, ds)
-      result = format_gwas_output(ds, result, freq)
-      out_fn = f'output.{pheno}.gallop'
-      if args.out is not None:
-        out_fn = f'{args.out}.{pheno}.gallop'
+      if args.out_fmt == 'gwas':
+        result = format_gwas_output(ds, result, freq)
+      else:
+        result = format_other_output(ds, result)
+
       result.to_csv(out_fn, index=False, sep='\t')
 
       #if args.refit:
@@ -494,7 +529,10 @@ https://www.nature.com/articles/s41598-018-24578-7
     for pheno in pheno_name:
       data['y'] = data[pheno]
       result = do_lme(data, ds, args.model, args.covar_name)
-      result = format_gwas_output(ds, result, freq)
+      if args.out_fmt == 'gwas':
+        result = format_gwas_output(ds, result, freq)
+      else:
+        result = format_other_output(ds, result)
       out_fn = f'output.{pheno}.linear_mixed'
       if args.out is not None:
         out_fn = f'{args.out}.{pheno}.linear_mixed'
