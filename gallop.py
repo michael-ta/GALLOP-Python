@@ -99,7 +99,7 @@ def preprocess(dp, dc, ds, covariates=None,
 
   freq = pd.DataFrame(index = ds.columns)
   n = len(id_in_study) * 2
-  allele_freq = ds.apply(lambda x: x.sum() / (n - x.isna().sum()))
+  allele_freq = ds.apply(lambda x: 1 - (x.sum() / (n - x.isna().sum())) )
   
   if MAF is not None:
     # drop variants that have MAF lower than specified
@@ -130,9 +130,11 @@ def preprocess(dp, dc, ds, covariates=None,
   else:
     df = df[df.IID.isin(id_in_study)].sort_values(by=['IID'])
 
-  df['time'] = np.subtract(
-                np.divide(df[time_name], 365.25),
-                np.mean(np.divide(df[time_name].dropna(), 365.25)))
+  df['time'] = df[time_name]
+  # don't normalize time name
+  #df['time'] = np.subtract(
+  #              np.divide(df[time_name], 365.25),
+  #              np.mean(np.divide(df[time_name].dropna(), 365.25)))
 
   # scipy scale uses a biased estimator of variance with df=0
   # use an unbiased estimator of variance (n-1)
@@ -290,10 +292,10 @@ def do_gallop(mdf, data, ds):
 
   a = pd.DataFrame()
   a['TEST'] = ['ADD_CHANGE'] * ns
-  a['BETA'] = -Theta[:,1]
-  a['SE'] = SE[:,1]
+  a['BETAs'] = -Theta[:,1]
+  a['SEs'] = SE[:,1]
   a['T_STAT'] = -9
-  a['P'] = Pval[:,1]
+  a['Ps'] = Pval[:,1]
   a['OBS_CT_REP'] = np.squeeze(np.asarray(np.matmul(TTs[:,0], np.matrix(ds.notna()))))
   a['BETAi'] = -Theta[:,0]
   a['SEi'] = SE[:,0]
@@ -335,10 +337,10 @@ def do_lme(data, ds, mod_formula=None, covariates=None):
 
   a = pd.DataFrame()
   a['TEST'] = ['ADD_CHANGE'] * ns
-  a['BETA'] = -beta_slope[:,0]
-  a['SE'] = beta_slope[:,1]
+  a['BETAs'] = -beta_slope[:,0]
+  a['SEs'] = beta_slope[:,1]
   a['T_STAT'] = beta_slope[:,2]
-  a['P'] = beta_slope[:,3]
+  a['Ps'] = beta_slope[:,3]
   a['OBS_CT_REP'] = len(data) # length of the phenotypes includes longitudinal data
   a['BETAi'] = -beta_incpt[:,0]
   a['SEi'] = beta_incpt[:,1]
@@ -372,7 +374,7 @@ def format_gwas_output(ds, res, freq):
                'A1': []}
   for snp in snp_ids:
     chrom, pos, ref, alt = snp.split(':')
-    alt, a1 = alt.split('_')
+    alt, ref2 = alt.split('_')              # plink2 export rawfile defaults to ALT_REF ID
     ID = ':'.join([chrom, pos, ref, alt])
     data_dict['#CHROM'].append(chrom)
     data_dict['POS'].append(pos)
@@ -380,7 +382,7 @@ def format_gwas_output(ds, res, freq):
     data_dict['SNP_ID'].append(snp)
     data_dict['REF'].append(ref)
     data_dict['ALT'].append(alt)
-    data_dict['A1'].append(a1)
+    data_dict['A1'].append(alt)
 
   p = pd.DataFrame.from_dict(data_dict)
   p = p.merge(freq.reset_index(), left_on='SNP_ID', right_on='index', how='inner') 
