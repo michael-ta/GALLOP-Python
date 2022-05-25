@@ -131,11 +131,6 @@ def preprocess(dp, dc, ds, covariates=None,
     df = df[df.IID.isin(id_in_study)].sort_values(by=['IID'])
 
   df['time'] = df[time_name]
-  # don't normalize time name
-  #df['time'] = np.subtract(
-  #              np.divide(df[time_name], 365.25),
-  #              np.mean(np.divide(df[time_name].dropna(), 365.25)))
-
   # scipy scale uses a biased estimator of variance with df=0
   # use an unbiased estimator of variance (n-1)
   data = pd.DataFrame(
