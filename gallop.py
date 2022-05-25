@@ -73,6 +73,10 @@ def preprocess(dp, dc, ds, covariates=None,
 
   id_in_study = set.intersection(*[set(x['IID'].tolist()) for x in [dp, dc, ds]])
   sys.stdout.write("Found {} subjects\n".format(len(id_in_study)))
+
+  if len(id_in_study) == 0:
+    return (None, None, None)
+
   if keep is not None:
     dtmp = pd.read_csv(keep, engine='c', sep='\t', usecols=['IID'])
     id_in_study = id_in_study.intersection(set(dtmp['IID'].tolist()))
@@ -95,7 +99,7 @@ def preprocess(dp, dc, ds, covariates=None,
 
   freq = pd.DataFrame(index = ds.columns)
   n = len(id_in_study) * 2
-  allele_freq = ds.apply(lambda x: x.sum() / (n - x.isna().sum()))
+  allele_freq = ds.apply(lambda x: 1 - (x.sum() / (n - x.isna().sum())) )
   
   if MAF is not None:
     # drop variants that have MAF lower than specified
@@ -126,9 +130,11 @@ def preprocess(dp, dc, ds, covariates=None,
   else:
     df = df[df.IID.isin(id_in_study)].sort_values(by=['IID'])
 
-  df['time'] = np.subtract(
-                np.divide(df.study_days, 365.25),
-                np.mean(np.divide(df.study_days.dropna(), 365.25)))
+  df['time'] = df[time_name]
+  # don't normalize time name
+  #df['time'] = np.subtract(
+  #              np.divide(df[time_name], 365.25),
+  #              np.mean(np.divide(df[time_name].dropna(), 365.25)))
 
   # scipy scale uses a biased estimator of variance with df=0
   # use an unbiased estimator of variance (n-1)
@@ -153,7 +159,7 @@ def fit_lme(formula, data):
     mdf = md.fit(method=['Powell'], maxiter=1000) # optimizer used by R bobyqa
   except np.linalg.LinAlgError as e:
     sys.stderr.write(f"Error encountered fitting formula: {formula}\n")
-    sys.stderr.write(e)
+    sys.stderr.write(str(e))
     sys.stderr.write('\n')
     sys.stderr.flush()
     mdf = None 
@@ -276,7 +282,7 @@ def do_gallop(mdf, data, ds):
       Corr[0,i] = Vi[0,1]
     except np.linalg.LinAlgError as e:
       sys.stderr.write(f"Linear model error fitting {s[i]}\n")
-      sys.stderr.write(e)
+      sys.stderr.write(str(e))
       sys.stderr.write('\n')
       sys.stderr.flush()
 
@@ -286,10 +292,10 @@ def do_gallop(mdf, data, ds):
 
   a = pd.DataFrame()
   a['TEST'] = ['ADD_CHANGE'] * ns
-  a['BETA'] = -Theta[:,1]
-  a['SE'] = SE[:,1]
+  a['BETAs'] = -Theta[:,1]
+  a['SEs'] = SE[:,1]
   a['T_STAT'] = -9
-  a['P'] = Pval[:,1]
+  a['Ps'] = Pval[:,1]
   a['OBS_CT_REP'] = np.squeeze(np.asarray(np.matmul(TTs[:,0], np.matrix(ds.notna()))))
   a['BETAi'] = -Theta[:,0]
   a['SEi'] = SE[:,0]
@@ -331,10 +337,10 @@ def do_lme(data, ds, mod_formula=None, covariates=None):
 
   a = pd.DataFrame()
   a['TEST'] = ['ADD_CHANGE'] * ns
-  a['BETA'] = -beta_slope[:,0]
-  a['SE'] = beta_slope[:,1]
+  a['BETAs'] = -beta_slope[:,0]
+  a['SEs'] = beta_slope[:,1]
   a['T_STAT'] = beta_slope[:,2]
-  a['P'] = beta_slope[:,3]
+  a['Ps'] = beta_slope[:,3]
   a['OBS_CT_REP'] = len(data) # length of the phenotypes includes longitudinal data
   a['BETAi'] = -beta_incpt[:,0]
   a['SEi'] = beta_incpt[:,1]
@@ -368,7 +374,7 @@ def format_gwas_output(ds, res, freq):
                'A1': []}
   for snp in snp_ids:
     chrom, pos, ref, alt = snp.split(':')
-    alt, a1 = alt.split('_')
+    alt, ref2 = alt.split('_')              # plink2 export rawfile defaults to ALT_REF ID
     ID = ':'.join([chrom, pos, ref, alt])
     data_dict['#CHROM'].append(chrom)
     data_dict['POS'].append(pos)
@@ -376,7 +382,7 @@ def format_gwas_output(ds, res, freq):
     data_dict['SNP_ID'].append(snp)
     data_dict['REF'].append(ref)
     data_dict['ALT'].append(alt)
-    data_dict['A1'].append(a1)
+    data_dict['A1'].append(alt)
 
   p = pd.DataFrame.from_dict(data_dict)
   p = p.merge(freq.reset_index(), left_on='SNP_ID', right_on='index', how='inner') 
@@ -436,7 +442,8 @@ https://www.nature.com/articles/s41598-018-24578-7
   parser.add_argument('--pheno-name-file', help='File outlining the phenotypes (one on each line)') 
   parser.add_argument('--covar-name', help='Covariates to include in the model ex: "SEX PC1 PC2"',
                       required=True, nargs='+')
-  parser.add_argument('--time-name', help='Column name of time variable in phenotype; required for GALLOP analysis')
+  parser.add_argument('--time-name', help='Column name of time variable in phenotype; required for GALLOP analysis',
+                      default='study_days')
   parser.add_argument('--covar-variance-standardize', 
                       help='Standardize quantitative covariates to follow ~N(0,1)',
                       default=True)
@@ -480,6 +487,16 @@ https://www.nature.com/articles/s41598-018-24578-7
 
   if args.gallop or (not args.gallop and not args.lme):
     for pheno in pheno_name:
+      out_fn = f'output.{pheno}.gallop'
+      if args.out is not None:
+        out_fn = f'{args.out}.{pheno}.gallop'
+
+      if data is None and ds is None and freq is None:
+        # no samples found write empty file and return
+        with open(out_fn, 'w') as f:
+          pass
+        continue
+
       XY = data[['id', 'time', pheno] + args.covar_name].copy()
       XY.rename(columns={pheno: 'y'}, inplace=True)
       base_formula = args.model if args.model else f'y ~ {" + ".join(args.covar_name)} + time' 
@@ -492,9 +509,7 @@ https://www.nature.com/articles/s41598-018-24578-7
         result = format_gwas_output(ds, result, freq)
       else:
         result = format_other_output(ds, result)
-      out_fn = f'output.{pheno}.gallop'
-      if args.out is not None:
-        out_fn = f'{args.out}.{pheno}.gallop'
+
       result.to_csv(out_fn, index=False, sep='\t')
 
       #if args.refit:
