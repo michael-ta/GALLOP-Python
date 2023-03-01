@@ -43,12 +43,12 @@ def load_plink_raw(fn):
   header = None
 
   # dtypes of plink headers
-  dtypes = {'FID': np.dtype(np.str),
-            'IID': np.dtype(np.str),
-            'PAT': np.dtype(np.int),
-            'MAT': np.dtype(np.int),
-            'SEX': np.dtype(np.int),
-            'PHENOTYPE': np.dtype(np.int)}
+  dtypes = {'FID': np.dtype(str),
+            'IID': np.dtype(str),
+            'PAT': np.dtype(int),
+            'MAT': np.dtype(int),
+            'SEX': np.dtype(int),
+            'PHENOTYPE': np.dtype(int)}
   
   with open(fn, 'r') as f:
     for l in iter(f.readline, ''):
@@ -58,7 +58,7 @@ def load_plink_raw(fn):
       data = l.strip().split('\t')
       cdata.append(data[:6])
       tmp_arr = map(lambda x: np.nan if x == 'NA' else x, data[6:])
-      tmp_arr = np.asarray(list(tmp_arr), dtype=np.float)
+      tmp_arr = np.asarray(list(tmp_arr), dtype=float)
       gdata.append(tmp_arr)
   ds = np.vstack(gdata)
   ds = pd.DataFrame(ds, columns=header[6:])
@@ -70,6 +70,34 @@ def load_plink_raw(fn):
 def preprocess(dp, dc, ds, covariates=None, 
                standardize=True,  keep=None, time_name=None,
                pheno_name=None, MAF=None, rawfile=False, impute=None):
+  
+  """
+  preprocess inputs for GALLOP algorithm
+  
+  this function prepares the given dataframes for the GALLOP algorithm, it collects and formats
+  the columns necessary to run longitudinal GWAS
+  
+  Parameters
+  ----------
+  dp: DataFrame
+    input dataframe containing the longitudinal outcome (& time-dependent covariates)
+  dc: DataFrame
+    input dataframe containing the cross-sectional covariates
+  ds: DataFrame
+    input dataframe containing the genetic dosage
+    
+  MAF: float (0. - 0.5)
+    minor allele frequency filter for genetic data
+  impute: string
+    inpute missing genetic dosages via the mean
+    
+  Returns
+  -------
+  tuple(DataFrame, DataFrame, DataFrame)
+    returns a tuple of DataFrames in the following order:
+      formatted covariates, genetic dosages, allele frequency
+    
+  """
 
   id_in_study = set.intersection(*[set(x['IID'].tolist()) for x in [dp, dc, ds]])
   sys.stdout.write("Found {} subjects\n".format(len(id_in_study)))
@@ -93,7 +121,7 @@ def preprocess(dp, dc, ds, covariates=None,
   ds_drop_idx = ds.apply(lambda x: x.nunique() == 1)
   ds = ds.drop(ds.columns[ds_drop_idx], axis=1)
 
-  # drop alleles that have no unique values
+  # drop alleles that have no unique values (missing)
   ds_drop_idx = ds.isna().all()
   ds = ds.drop(ds.columns[ds_drop_idx], axis=1)
 
@@ -126,27 +154,74 @@ def preprocess(dp, dc, ds, covariates=None,
   df = df[df.IID.isin(id_in_study)]
 
   if time_name is not None:
-    df = df[df.IID.isin(id_in_study)].sort_values(by=['IID', time_name])
+    df['time'] = df[time_name]
+    df = df.sort_values(by=['IID', 'time'])
   else:
     df = df[df.IID.isin(id_in_study)].sort_values(by=['IID'])
+    
+    
+  ## construct additional covariates here before creating the DataFrame for the model
+  interaction_covars = get_interaction_covars(df, covariates)
+  non_interaction_covars = list(set(covariates).difference(interaction_covars))
 
-  df['time'] = df[time_name]
   # scipy scale uses a biased estimator of variance with df=0
   # use an unbiased estimator of variance (n-1)
   data = pd.DataFrame(
-          np.divide(scale(df[covariates], with_std=False), 
-                          np.matrix(np.sqrt(np.var(df[covariates], ddof=1)))),
-          index=df.index, columns=df[covariates].columns)
+          np.divide(scale(df[non_interaction_covars], with_std=False), 
+                          np.matrix(np.sqrt(np.var(df[non_interaction_covars], ddof=1)))),
+          index=df.index, columns=df[non_interaction_covars].columns)
   
-  data['time'] = df.time
+  if time_name is not None:
+    data['time'] = df.time
+    
   if pheno_name is not None:
-    data = pd.concat([data, df[pheno_name]], axis=1)
+    data['y'] = df[pheno_name]
   else:
     data['y'] = df.y
+    
+  data = create_interaction_covars(data, interaction_covars, time_name=time_name)
   data['id'] = pd.factorize(df.IID)[0] + 1 # add 1 since R is 1 based indexing
   data.reset_index(drop=True, inplace=True)
 
   return data, ds, freq
+
+def get_interaction_covars(df, covariates):
+  """
+  return covariates in model that are not supplied in the input files
+  """
+  return set(covariates).difference( set(df.columns.tolist()) )
+
+def create_interaction_covars(df, covariates, time_name=None):
+  """
+  create interaction covariates 
+  
+  Parameters
+  ----------
+  df: DataFrame
+    (longitudinal) dataframe with all input covariates
+  covariates: list
+    list of interaction terms to include in the model, interaction terms between 2 covariates
+    should be delimited by a ':' character
+  
+  Returns
+  -------
+  DataFrame
+    computed interaction term between 2 covariates
+  """
+  
+  mapper = {time_name: 'time'}
+  for c in covariates:
+    if ':' not in c:
+      raise KeyError(f'Incorrect or missing covariate specification {c}, check inputs')
+    c1, c2 = c.split(':')
+    
+    if c1 in mapper:
+      c1 = mapper[c1]
+    if c2 in mapper:
+      c2 = mapper[c2]
+    
+    df[c.replace(':', 'x')] = df[c1] * df[c2]
+  return df
 
 def fit_lme(formula, data):
   md = smf.mixedlm(formula, data, groups=data["id"], re_formula='~time')
@@ -478,7 +553,9 @@ https://www.nature.com/articles/s41598-018-24578-7
     pheno_name = [args.pheno_name]
 
   data, ds, freq = preprocess(dp, dc, ds, args.covar_name, args.covar_variance_standardize, args.keep,
-                                      args.time_name, pheno_name, args.maf, rawfile=rawfile, impute='mean')
+                              args.time_name, pheno_name, args.maf, rawfile=rawfile, impute='mean')
+  
+  covariates = list(map(lambda x: x.replace(':', 'x'), args.covar_name))
 
   if args.gallop or (not args.gallop and not args.lme):
     for pheno in pheno_name:
@@ -492,9 +569,9 @@ https://www.nature.com/articles/s41598-018-24578-7
           pass
         continue
 
-      XY = data[['id', 'time', pheno] + args.covar_name].copy()
+      XY = data[['id', 'time', pheno] + covariates].copy()
       XY.rename(columns={pheno: 'y'}, inplace=True)
-      base_formula = args.model if args.model else f'y ~ {" + ".join(args.covar_name)} + time' 
+      base_formula = args.model if args.model else f'y ~ {" + ".join(covariates)} + time' 
       sys.stdout.write('Running GALLOP algorithm\n')
       sys.stdout.write(f'Fitting base model: {base_formula}\n') 
       base_mod = fit_lme(base_formula, XY)
@@ -525,7 +602,7 @@ https://www.nature.com/articles/s41598-018-24578-7
   elif args.lme:
     for pheno in pheno_name:
       data['y'] = data[pheno]
-      result = do_lme(data, ds, args.model, args.covar_name)
+      result = do_lme(data, ds, args.model, covariates)
       if args.out_fmt == 'gwas':
         result = format_gwas_output(ds, result, freq)
       else:
