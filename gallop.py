@@ -1,46 +1,152 @@
-create_interaction_covars(data, interaction_covars, time_name=time_name)
+#!/usr/bin/env python3
+# This script implements the GALLOP algorithm for longitudinal GWAS analysis
+# Additional details can be found in the original publication
+# https://www.nature.com/articles/s41598-018-24578-7
+# Install the python packages in the requirements.txt file prior to running
+
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import scale
+from sklearn.impute import SimpleImputer
+from scipy.stats import norm
+
+import argparse
+import sys
+import os
+
+try:
+  import datatable
+except ImportError:
+  datatable = None
+
+
+def is_plink_export_raw(ds):
+  """ Check to see if dataframe comes from PLINK export command, if so we want to drop these columns
+      TODO:
+        we can either drop columns that are true or drop only if we assume PLINK .raw format
+  """
+  return (ds.columns[:6] == ['FID', 'IID', 'PAT', 'MAT', 'SEX', 'PHENOTYPE']).all()
+
+
+def load_plink_raw(fn):
+  """ More efficient loading of the plink export genotype data
+      TODO:
+        reduce memory usuage by loading chuncks of data
+  """
+  cdata = [] # clinical data
+  gdata = [] # genotype data
+  header = None
+
+  # dtypes of plink headers
+  dtypes = {'FID': np.dtype(np.str),
+            'IID': np.dtype(np.str),
+            'PAT': np.dtype(np.int),
+            'MAT': np.dtype(np.int),
+            'SEX': np.dtype(np.int),
+            'PHENOTYPE': np.dtype(np.int)}
+  
+  with open(fn, 'r') as f:
+    for l in iter(f.readline, ''):
+      if header is None:
+        header = l.strip().split('\t')
+        continue
+      data = l.strip().split('\t')
+      cdata.append(data[:6])
+      tmp_arr = map(lambda x: np.nan if x == 'NA' else x, data[6:])
+      tmp_arr = np.asarray(list(tmp_arr), dtype=np.float)
+      gdata.append(tmp_arr)
+  ds = np.vstack(gdata)
+  ds = pd.DataFrame(ds, columns=header[6:])
+  cds = pd.DataFrame(cdata, columns=header[:6])
+  cds.astype(dtype=dtypes)
+  return pd.concat([cds, ds], axis=1)
+
+
+def preprocess(dp, dc, ds, covariates=None, 
+               standardize=True,  keep=None, time_name=None,
+               pheno_name=None, MAF=None, rawfile=False, impute=None):
+
+  id_in_study = set.intersection(*[set(x['IID'].tolist()) for x in [dp, dc, ds]])
+  sys.stdout.write("Found {} subjects\n".format(len(id_in_study)))
+
+  if len(id_in_study) == 0:
+    return (None, None, None)
+
+  if keep is not None:
+    dtmp = pd.read_csv(keep, engine='c', sep='\t', usecols=['IID'])
+    id_in_study = id_in_study.intersection(set(dtmp['IID'].tolist()))
+
+    sys.stdout.write("IID list provided; keeping {} subjects\n".format(len(id_in_study)))
+  
+  ds = ds[ds.IID.isin(id_in_study)].sort_values(by=['IID'])
+  if rawfile:
+    ds = ds.drop(['FID', 'IID', 'PAT', 'MAT', 'SEX', 'PHENOTYPE'], axis=1)
+  else:
+    ds = ds.drop(['IID'], axis=1) # drop ID after filtering
+  
+  # drop alleles that have no unique values
+  ds_drop_idx = ds.apply(lambda x: x.nunique() == 1)
+  ds = ds.drop(ds.columns[ds_drop_idx], axis=1)
+
+  # drop alleles that have no unique values
+  ds_drop_idx = ds.isna().all()
+  ds = ds.drop(ds.columns[ds_drop_idx], axis=1)
+
+  freq = pd.DataFrame(index = ds.columns)
+  n = len(id_in_study) * 2
+  allele_freq = ds.apply(lambda x: 1 - (x.sum() / (n - x.isna().sum())) )
+  
+  if MAF is not None:
+    # drop variants that have MAF lower than specified
+    ds_drop_idx = np.logical_or( allele_freq < MAF,
+                                 allele_freq > (1 - MAF) )
+    freq['A1_FREQ'] = allele_freq[~ds_drop_idx]
+    ds = ds.drop(ds.columns[ds_drop_idx], axis=1)
+  else:
+    freq['A1_FREQ'] = allele_freq
+  
+  missing_freq = None
+  if impute is not None:
+    imp_ds = SimpleImputer(missing_values=np.nan, strategy=impute)
+    imp_ds.fit(ds)
+    tmp_header = ds.columns.tolist()
+    missing_freq = ds.isna().sum() / len(id_in_study)
+    freq['MISS_FREQ'] = missing_freq
+
+    ds = imp_ds.transform(ds)
+    ds = pd.DataFrame(ds, columns=tmp_header)
+  
+  freq = freq.dropna()
+  df = pd.merge(dp, dc, left_on='IID', right_on='IID', how='inner')
+  df = df[df.IID.isin(id_in_study)]
+
+  if time_name is not None:
+    df = df[df.IID.isin(id_in_study)].sort_values(by=['IID', time_name])
+  else:
+    df = df[df.IID.isin(id_in_study)].sort_values(by=['IID'])
+
+  df['time'] = df[time_name]
+  # scipy scale uses a biased estimator of variance with df=0
+  # use an unbiased estimator of variance (n-1)
+  data = pd.DataFrame(
+          np.divide(scale(df[covariates], with_std=False), 
+                          np.matrix(np.sqrt(np.var(df[covariates], ddof=1)))),
+          index=df.index, columns=df[covariates].columns)
+  
+  data['time'] = df.time
+  if pheno_name is not None:
+    data = pd.concat([data, df[pheno_name]], axis=1)
+  else:
+    data['y'] = df.y
   data['id'] = pd.factorize(df.IID)[0] + 1 # add 1 since R is 1 based indexing
   data.reset_index(drop=True, inplace=True)
 
   return data, ds, freq
-
-def get_interaction_covars(df, covariates):
-  """
-  return covariates in model that are not supplied in the input files
-  """
-  return set(covariates).difference( set(df.columns.tolist()) )
-
-def create_interaction_covars(df, covariates, time_name=None):
-  """
-  create interaction covariates 
-  
-  Parameters
-  ----------
-  df: DataFrame
-    (longitudinal) dataframe with all input covariates
-  covariates: list
-    list of interaction terms to include in the model, interaction terms between 2 covariates
-    should be delimited by a ':' character
-  
-  Returns
-  -------
-  DataFrame
-    computed interaction term between 2 covariates
-  """
-  
-  mapper = {time_name: 'time'}
-  for c in covariates:
-    if ':' not in c:
-      raise KeyError(f'Incorrect or missing covariate specification {c}, check inputs')
-    c1, c2 = c.split(':')
-    
-    if c1 in mapper:
-      c1 = mapper[c1]
-    if c2 in mapper:
-      c2 = mapper[c2]
-    
-    df[c.replace(':', 'x')] = df[c1] * df[c2]
-  return df
 
 def fit_lme(formula, data):
   md = smf.mixedlm(formula, data, groups=data["id"], re_formula='~time')
