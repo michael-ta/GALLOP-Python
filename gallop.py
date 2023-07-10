@@ -43,12 +43,12 @@ def load_plink_raw(fn):
   header = None
 
   # dtypes of plink headers
-  dtypes = {'FID': np.dtype(np.str),
-            'IID': np.dtype(np.str),
-            'PAT': np.dtype(np.int),
-            'MAT': np.dtype(np.int),
-            'SEX': np.dtype(np.int),
-            'PHENOTYPE': np.dtype(np.int)}
+  dtypes = {'FID': np.dtype(str),
+            'IID': np.dtype(str),
+            'PAT': np.dtype(int),
+            'MAT': np.dtype(int),
+            'SEX': np.dtype(int),
+            'PHENOTYPE': np.dtype(int)}
   
   with open(fn, 'r') as f:
     for l in iter(f.readline, ''):
@@ -58,7 +58,7 @@ def load_plink_raw(fn):
       data = l.strip().split('\t')
       cdata.append(data[:6])
       tmp_arr = map(lambda x: np.nan if x == 'NA' else x, data[6:])
-      tmp_arr = np.asarray(list(tmp_arr), dtype=np.float)
+      tmp_arr = np.asarray(list(tmp_arr), dtype=float)
       gdata.append(tmp_arr)
   ds = np.vstack(gdata)
   ds = pd.DataFrame(ds, columns=header[6:])
